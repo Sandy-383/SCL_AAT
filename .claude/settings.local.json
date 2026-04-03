@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "Bash(nvidia-smi)",
+      "Bash(nvcc --version)",
+      "Bash(where nvcc:*)",
+      "Bash(python -c \"import cupy; print\\(''CuPy:'', cupy.__version__\\); print\\(''GPU:'', cupy.cuda.runtime.getDeviceProperties\\(0\\)[''name''].decode\\(\\)\\)\")"
     ]
   }
 }

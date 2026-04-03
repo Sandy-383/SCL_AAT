@@ -1,0 +1,71 @@
+{
+  "cuda_gwo": {
+    "hypervolume": 11686.246934,
+    "GD": 377.6211,
+    "IGD": 1167.0401,
+    "spacing": 0.0,
+    "pareto_size": 1,
+    "best_f1": 259.168,
+    "best_f2": 138.316,
+    "best_f3": 4843.356,
+    "runtime_s": 43.249,
+    "n_evals": 0,
+    "final_hv_iter": 4503089646.426088,
+    "hypervolume_improvement_%": 0.0,
+    "GD_improvement_%": 0.0,
+    "IGD_improvement_%": 0.0,
+    "best_f1_improvement_%": 0.0
+  },
+  "cpu_gwo": {
+    "hypervolume": 11686.246934,
+    "GD": 377.6211,
+    "IGD": 1167.0401,
+    "spacing": 0.0,
+    "pareto_size": 1,
+    "best_f1": 259.168,
+    "best_f2": 138.316,
+    "best_f3": 4843.356,
+    "runtime_s": 43.169,
+    "n_evals": 0,
+    "final_hv_iter": 18395448131.887817
+  },
+  "pso": {
+    "hypervolume": 11686.246934,
+    "GD": 377.6211,
+    "IGD": 1167.0401,
+    "spacing": 0.0,
+    "pareto_size": 1,
+    "best_f1": 259.168,
+    "best_f2": 138.316,
+    "best_f3": 4843.356,
+    "runtime_s": 37.325,
+    "n_evals": 0,
+    "final_hv_iter": 14469688814.037605
+  },
+  "ga": {
+    "hypervolume": 212644278.155895,
+    "GD": 0.0,
+    "IGD": 802.2463,
+    "spacing": 0.0,
+    "pareto_size": 1,
+    "best_f1": 176.217,
+    "best_f2": 69.592,
+    "best_f3": 4488.025,
+    "runtime_s": 42.903,
+    "n_evals": 0,
+    "final_hv_iter": 3357672172.098183
+  },
+  "aco": {
+    "hypervolume": 8394921.456204,
+    "GD": 0.0,
+    "IGD": 802.2463,
+    "spacing": 0.0,
+    "pareto_size": 1,
+    "best_f1": 235.343,
+    "best_f2": 132.067,
+    "best_f3": 2887.062,
+    "runtime_s": 40.598,
+    "n_evals": 0,
+    "final_hv_iter": 2345260977.1145983
+  }
+}

@@ -1,0 +1,16 @@
+\begin{table}[ht]
+\centering
+\caption{Algorithm Comparison on Synthetic City (200 stops, 10 routes)}
+\label{tab:results}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Algorithm & HV ↑ & GD ↓ & IGD ↓ & Spacing ↓ & Best f₁ ↓ & Time (s) ↓ & Archive Size \\
+\midrule
+\textbf{\textbf{CUDA-GWO (Ours)}} & \textbf{11686.2469} & \textbf{377.6211} & \textbf{1167.0401} & \textbf{0.0000} & \textbf{259.1680} & \textbf{43.2490} & \textbf{1} \\
+CPU-GWO & 11686.2469 & 377.6211 & 1167.0401 & 0.0000 & 259.1680 & 43.1690 & 1 \\
+PSO & 11686.2469 & 377.6211 & 1167.0401 & 0.0000 & 259.1680 & 37.3250 & 1 \\
+GA (NSGA-II) & 212644278.1559 & 0.0000 & 802.2463 & 0.0000 & 176.2170 & 42.9030 & 1 \\
+ACO & 8394921.4562 & 0.0000 & 802.2463 & 0.0000 & 235.3430 & 40.5980 & 1 \\
+\bottomrule
+\end{tabular}
+\end{table}

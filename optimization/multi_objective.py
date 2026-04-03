@@ -58,21 +58,126 @@ class ObjectiveEvaluator:
         -------
         objectives : np.ndarray shape (4,)  — [f1, f2, f3, f4]
         """
-        # Build travel time matrix for this specific solution
-        g_sol = self.graph.apply_solution(routes)
-        tt    = g_sol.all_pairs_travel_time()
+        # Fast path: update pre-computed base matrix with transit edges
+        # (avoids rebuilding the full graph + running all-pairs Dijkstra)
+        tt = self._apply_routes_fast(routes)
 
         f1 = self._avg_travel_time(tt)
-        f2 = self._avg_transfers(routes, tt)
-        f3 = self._operational_cost(routes, g_sol)
-        f4 = 1.0 - g_sol.compute_demand_coverage(routes)
+        f2 = self._avg_transfers_fast(routes)
+        f3 = self._operational_cost_fast(routes)
+        f4 = 1.0 - self._demand_coverage_fast(routes)
 
         penalty, _ = self.constraints.evaluate(routes, self.demand)
 
         objectives = np.array([f1, f2, f3, f4], dtype=np.float64)
-        objectives += penalty   # penalty shifts all objectives equally
+        objectives += penalty
 
         return objectives
+
+    def _apply_routes_fast(self, routes: List[Dict]) -> np.ndarray:
+        """
+        Update the pre-computed base travel-time matrix with transit route edges.
+
+        Uses vectorised Floyd-Warshall relaxation (one pass per edge) instead of
+        rebuilding the full networkx graph and re-running Dijkstra.
+        """
+        tt = self._base_tt.copy()
+
+        for r in routes:
+            seq = r["stop_sequence"]
+            for k in range(len(seq) - 1):
+                u, v = int(seq[k]), int(seq[k + 1])
+                if not (0 <= u < self.n and 0 <= v < self.n):
+                    continue
+                t = float(self.graph.adj_matrix[u][v])
+                if not np.isfinite(t) or t <= 0:
+                    t = self.graph._estimate_travel_time(u, v)
+                if t < tt[u][v]:
+                    tt[u][v] = t
+                    # Vectorised relaxation: for all (i,j), candidate = tt[i,u] + t + tt[v,j]
+                    col_u = tt[:, u]          # shape (n,)
+                    row_v = tt[v, :]          # shape (n,)
+                    candidates = col_u[:, None] + t + row_v[None, :]  # shape (n,n)
+                    np.minimum(tt, candidates, out=tt)
+
+        return tt
+
+    def _avg_transfers_fast(self, routes: List[Dict]) -> float:
+        """
+        Estimate fraction of OD pairs requiring a transfer.
+        A stop pair needs a transfer if no single route covers both stops.
+        """
+        # Map stop_id -> set of route indices
+        stop_routes: Dict[int, set] = {}
+        for idx, r in enumerate(routes):
+            for s in r["stop_sequence"]:
+                stop_routes.setdefault(int(s), set()).add(idx)
+
+        # Build served-stop mask
+        served = np.zeros(self.n, dtype=bool)
+        for s in stop_routes:
+            if 0 <= s < self.n:
+                served[s] = True
+
+        if not served.any():
+            return 1.0
+
+        served_idx = np.where(served)[0]
+
+        # For each stop pair: does at least one route cover both?
+        transfers = 0
+        total = 0
+        for i in served_idx:
+            for j in served_idx:
+                if i == j:
+                    continue
+                ri = stop_routes.get(int(i), set())
+                rj = stop_routes.get(int(j), set())
+                if ri.isdisjoint(rj):
+                    transfers += 1
+                total += 1
+
+        return transfers / max(total, 1)
+
+    def _operational_cost_fast(self, routes: List[Dict]) -> float:
+        """
+        Fleet operational cost (Rs thousands/day) using base graph geometry.
+        Does not require a rebuilt solution graph.
+        """
+        op_hours = self.config.get("operating_hours", 18)
+        speed    = self.config.get("avg_speed_kmh", 25.0)
+        total    = 0.0
+        for r in routes:
+            length_km = self.graph.get_route_length_km(r)
+            vehicles  = r.get("num_vehicles", 5)
+            trip_h    = length_km / speed
+            fuel      = self.FUEL_COST_KM  * length_km * vehicles
+            driver    = self.DRIVER_COST_H * trip_h    * vehicles
+            total    += (fuel + driver) * op_hours
+        return total / 1000.0
+
+    def _demand_coverage_fast(self, routes: List[Dict]) -> float:
+        """
+        Fraction of total OD demand covered by routes (both stops served).
+        """
+        served: set = set()
+        for r in routes:
+            for s in r["stop_sequence"]:
+                if 0 <= int(s) < self.n:
+                    served.add(int(s))
+
+        if not served:
+            return 0.0
+
+        total_demand   = self.demand.sum()
+        if total_demand == 0:
+            return 0.0
+
+        served_arr = np.array(sorted(served), dtype=int)
+        covered    = self.demand[np.ix_(served_arr, served_arr)].sum()
+        # Subtract diagonal (i==j trivially covered but not meaningful)
+        covered   -= self.demand[served_arr, served_arr].sum()
+        return float(covered / total_demand)
 
     def evaluate_batch(self, solutions: List[List[Dict]]) -> np.ndarray:
         """
@@ -98,53 +203,6 @@ class ObjectiveEvaluator:
             return 999.0
         return float(weighted.sum() / denom)
 
-    def _avg_transfers(self, routes: List[Dict], tt: np.ndarray) -> float:
-        """
-        Estimate average transfers per trip.
-        Approximated by counting stops served by each route and comparing
-        OD connectivity: if same route serves both stops → 0 transfers,
-        otherwise 1+ transfer.
-        """
-        # Map stop → set of routes serving it
-        stop_routes: Dict[int, set] = {}
-        for r in routes:
-            for s in r["stop_sequence"]:
-                stop_routes.setdefault(s, set()).add(r["route_id"])
-
-        total_transfers = 0.0
-        total_pairs     = 0
-
-        for i in range(self.n):
-            for j in range(self.n):
-                if i == j or not np.isfinite(tt[i][j]):
-                    continue
-                ri = stop_routes.get(i, set())
-                rj = stop_routes.get(j, set())
-                if ri.isdisjoint(rj):
-                    total_transfers += 1   # at least one transfer needed
-                total_pairs += 1
-
-        return total_transfers / max(total_pairs, 1)
-
-    def _operational_cost(self, routes: List[Dict], g_sol) -> float:
-        """
-        Total fleet operational cost per hour (₹).
-          = Σ_r  vehicles_r × (fuel_cost × route_length_km / speed + driver_cost)
-        """
-        op_hours = self.config.get("operating_hours", 18)
-        speed    = self.config.get("avg_speed_kmh", 25.0)
-        total    = 0.0
-
-        for r in routes:
-            length_km = g_sol.get_route_length_km(r)
-            vehicles  = r.get("num_vehicles", 5)
-            trip_h    = length_km / speed
-            fuel      = self.FUEL_COST_KM * length_km * vehicles
-            driver    = self.DRIVER_COST_H * trip_h * vehicles
-            total    += (fuel + driver) * op_hours
-
-        # Normalise to thousands (₹ thousands per day)
-        return total / 1000.0
 
 
 # ─── Pareto Front ─────────────────────────────────────────────────────────────
@@ -264,6 +322,9 @@ class ParetoFront:
 
         if reference_pt is None:
             reference_pt = front.max(axis=0) * 1.1
+
+        # Guarantee ref dominates every point in this front
+        reference_pt = np.maximum(reference_pt, front.max(axis=0) * 1.01 + 1e-6)
 
         M = front.shape[1]
         if M == 2:

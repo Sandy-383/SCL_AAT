@@ -3,22 +3,15 @@ Python ↔ CUDA Binding Layer
 ============================
 File: cuda_gwo/cuda_gwo_binding.py
 
-Loads the compiled CUDA shared library (libcudagwo.so / cudagwo.dll)
-and exposes a clean Python API identical to the CPU-GWO interface.
+Priority order for GPU execution:
+  1. CuPy RawKernel (no nvcc needed — works on RTX 4060 out-of-the-box)
+  2. Compiled .so/.dll via ctypes (requires nvcc)
+  3. Python simulation fallback (CPU, numpy-vectorised)
 
-Compilation:
-    cd cuda_gwo
-    nvcc -O3 -arch=sm_75 -shared -fPIC \\
-         gwo_kernel.cu fitness_kernel.cu memory_manager.cu gwo_host.cpp \\
-         -lcurand -o libcudagwo.so
-
-    (Replace sm_75 with your GPU's compute capability:
-     RTX 30xx → sm_86, RTX 20xx → sm_75, GTX 16xx → sm_75)
-
-Fallback:
-    If the library is not found or CUDA is unavailable,
-    CUDAGWOBinding.available == False and the caller falls back to CPU-GWO.
+CUDAGWOBinding.available == True when either CuPy or the shared lib is found.
 """
+
+import gpu_setup           # sets up NVIDIA DLL paths on Windows — must be first
 
 import ctypes
 import logging
@@ -30,6 +23,12 @@ from typing import List, Dict, Tuple, Callable, Optional
 from optimization.problem_encoder import RouteEncoder
 from optimization.multi_objective import ParetoFront
 from config import GWO_CONFIG, CUDA_CONFIG
+
+# ── Try CuPy (preferred — no nvcc needed) ────────────────────────────────────
+try:
+    from cuda_gwo.cupy_gwo import CuPyGWO, _CUPY_OK
+except Exception:
+    _CUPY_OK = False
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +67,29 @@ class CUDAGWOBinding:
     """
 
     def __init__(self):
-        self.available = False
-        self._lib      = None
+        self.available   = False
+        self._lib        = None
+        self._use_cupy   = False
         self._try_load()
 
     def _try_load(self):
+        # Priority 1: CuPy (no nvcc needed — works on RTX 4060 directly)
+        if _CUPY_OK:
+            self.available  = True
+            self._use_cupy  = True
+            logger.info("CUDA-GWO backend: CuPy RawKernel (RTX 4060 sm_89)")
+            return
+
+        # Priority 2: compiled .so/.dll via ctypes
         lib_path = _find_library()
         if lib_path is None:
             logger.warning(
-                "CUDA library not found in %s. "
-                "Run 'make' inside cuda_gwo/ to compile. "
-                "Falling back to CPU-GWO.", _LIB_DIR
+                "No GPU backend found. "
+                "CuPy: run 'pip install cupy-cuda12x'. "
+                "Compiled lib: run 'make' inside cuda_gwo/. "
+                "Running Python simulation (CPU)."
             )
+            self.available = True   # simulation mode still works
             return
 
         try:
@@ -90,6 +100,7 @@ class CUDAGWOBinding:
             self._print_device_info()
         except OSError as e:
             logger.warning("Failed to load CUDA library: %s", e)
+            self.available = True   # fall through to simulation
 
     def _setup_signatures(self):
         """Declare ctypes argument and return types for all C functions."""
@@ -154,14 +165,34 @@ class CUDAGWOBinding:
         best_obj    : np.ndarray shape (4,)
         stats       : Dict — timing and iteration history
         """
-        if not self.available:
-            raise RuntimeError("CUDA library not loaded. Cannot run CUDA-GWO.")
+        # ── Route to CuPy backend (RTX 4060 native) ──────────────────────
+        if self._use_cupy:
+            t0 = time.perf_counter()
+            gwo = CuPyGWO(
+                encoder        = encoder,
+                fitness_fn     = fitness_fn,
+                adj_matrix     = adj_matrix,
+                demand         = demand,
+                num_wolves     = num_wolves,
+                max_iterations = max_iterations,
+                seed           = seed,
+                verbose        = verbose,
+            )
+            best_routes, best_obj = gwo.optimize()
+            runtime = time.perf_counter() - t0
+            stats   = gwo.history
+            stats["total_time_s"] = runtime
+            stats["backend"]      = "CuPy/RTX4060"
+            stats["summary"]      = gwo.summary()
+            logger.info("CuPy-GWO | %.2fs | HV=%.4f", runtime,
+                        stats["hypervolume"][-1] if stats["hypervolume"] else 0)
+            return best_routes, best_obj, stats
 
         rng = np.random.default_rng(seed)
         dim = encoder.dimension
         n   = adj_matrix.shape[0]
 
-        logger.info("CUDA-GWO | wolves=%d | iters=%d | dim=%d | stops=%d",
+        logger.info("CUDA-GWO (simulation) | wolves=%d | iters=%d | dim=%d | stops=%d",
                     num_wolves, max_iterations, dim, n)
 
         # ── Initial population ────────────────────────────────────────────

@@ -139,6 +139,10 @@ class ConvergencePlotter:
         cuda_time = timings.get("cuda_gwo", 1.0)
         algos     = [a for a in timings if a != "cuda_gwo"]
         speedups  = [timings[a] / cuda_time for a in algos]
+
+        if not speedups:
+            logger.info("Speedup plot skipped: only one algorithm ran.")
+            return ""
         colors    = [COLORS.get(a, "#999999") for a in algos]
         labels    = [LABELS.get(a, a) for a in algos]
 
@@ -249,10 +253,15 @@ class ConvergencePlotter:
         algos  = [a for a in timings if a != "cuda_gwo"]
         sups   = [timings[a] / cuda_t for a in algos]
         cols   = [COLORS.get(a, "#999") for a in algos]
-        ax3.bar([LABELS.get(a, a) for a in algos], sups, color=cols,
-                edgecolor="black", linewidth=0.7)
+        if algos:
+            ax3.bar([LABELS.get(a, a) for a in algos], sups, color=cols,
+                    edgecolor="black", linewidth=0.7)
+        else:
+            ax3.text(0.5, 0.5, "Run with --algo all\nto see speedup comparison",
+                     ha="center", va="center", transform=ax3.transAxes,
+                     fontsize=10, color="#666666")
         ax3.set_title("Execution Speedup over CUDA-GWO", fontweight="bold")
-        ax3.set_ylabel("Speedup ×"); ax3.grid(axis="y", alpha=0.3, linestyle="--")
+        ax3.set_ylabel("Speedup x"); ax3.grid(axis="y", alpha=0.3, linestyle="--")
 
         # 4. Pareto f1 vs f2 (bottom-left)
         ax4 = fig.add_subplot(gs[1, 0])

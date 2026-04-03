@@ -21,6 +21,8 @@ Workflow:
   7. Print/save results summary
 """
 
+import gpu_setup           # sets up NVIDIA DLL paths for CuPy on Windows
+
 import os
 import sys
 import time
@@ -375,7 +377,7 @@ def main():
             f"  {res['algo']:<18} "
             f"f1={obj[0]:.2f} min  "
             f"f2={obj[1]:.3f} tx  "
-            f"f3={obj[2]:.1f} k₹  "
+            f"f3={obj[2]:.1f} kRs  "
             f"f4={obj[3]:.3f}  "
             f"time={res['runtime_s']:.2f}s"
         )

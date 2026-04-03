@@ -191,7 +191,7 @@ class SolutionQualityEvaluator:
         ]
 
         path = os.path.join(self.output_dir, filename)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
         logger.info("LaTeX table saved: %s", path)
         return path
