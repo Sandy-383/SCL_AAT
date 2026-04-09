@@ -12,7 +12,13 @@ import random
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
+try:
+    from sklearn.cluster import KMeans
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -123,17 +129,23 @@ class SyntheticCityGenerator:
         stops      = self._generate_stops()
         adj_matrix = self._build_adjacency(stops)
         demand     = self._generate_demand(stops)
-        routes     = self._generate_routes(stops, adj_matrix)
+
+        # Pre-compute cluster labels so they can be stored and visualized
+        coords        = stops[["stop_lat", "stop_lon"]].values
+        cluster_labels = self._kmeans_labels(coords, self.num_routes)
+
+        routes = self._generate_routes(stops, adj_matrix, cluster_labels)
 
         logger.info("[Synthetic] City '%s': %d stops, %d routes generated.",
                     self.city_name, len(stops), len(routes))
 
         return {
-            "stops"      : stops,
-            "routes"     : routes,
-            "adj_matrix" : adj_matrix,
-            "demand"     : demand,
-            "city_name"  : self.city_name,
+            "stops"         : stops,
+            "routes"        : routes,
+            "adj_matrix"    : adj_matrix,
+            "demand"        : demand,
+            "city_name"     : self.city_name,
+            "cluster_labels": cluster_labels,   # (n,) int array — one label per stop
         }
 
     # ── Private helpers ──────────────────────────────────────────────────────
@@ -235,57 +247,123 @@ class SyntheticCityGenerator:
 
         return demand.astype(np.float32)
 
-    def _generate_routes(self, stops: pd.DataFrame, adj_matrix: np.ndarray) -> list:
+    def _generate_routes(
+        self,
+        stops: pd.DataFrame,
+        adj_matrix: np.ndarray,
+        labels: np.ndarray,
+    ) -> list:
         """
-        Generate bus routes as sequences of stops using a greedy nearest-neighbor
-        heuristic, ensuring each route spans from a residential zone to the CBD.
+        Generate bus routes using pre-computed K-means cluster labels.
+
+        Each cluster becomes one route: stops are ordered greedily by proximity
+        within the cluster, then the nearest CBD stop is appended as terminal.
         """
         n        = len(stops)
         cbd_mask = stops["zone"] == "CBD"
         cbd_ids  = stops.index[cbd_mask].tolist()
-        res_ids  = stops.index[~cbd_mask].tolist()
 
-        routes = []
+        logger.info(
+            "[KMeans] Clustered %d stops into %d geographic route zones.",
+            n, self.num_routes
+        )
+
+        routes: list = []
         for r in range(self.num_routes):
-            # Start from a residential stop, end at CBD
-            start = random.choice(res_ids)
-            end   = random.choice(cbd_ids)
+            cluster_idx = np.where(labels == r)[0].tolist()
 
-            # Greedy path: repeatedly pick nearest unvisited stop
-            route_stops = [start]
-            visited     = {start}
-            target_len  = random.randint(6, 15)
+            # Merge tiny clusters (< 3 stops) with their nearest neighbour cluster
+            if len(cluster_idx) < 3:
+                cluster_idx = self._expand_cluster(cluster_idx, labels, r, n)
 
-            current = start
-            for _ in range(target_len - 1):
-                if current == end:
-                    break
-                # Find nearest unvisited with finite distance
-                dists = [(adj_matrix[current][j], j)
-                         for j in range(n) if j not in visited
-                         and adj_matrix[current][j] < np.inf]
-                if not dists:
-                    break
-                dists.sort()
-                # With some probability pick 2nd or 3rd nearest for variety
-                pick_idx = min(random.choices([0, 1, 2], weights=[0.7, 0.2, 0.1])[0],
-                               len(dists) - 1)
-                _, nxt = dists[pick_idx]
-                route_stops.append(nxt)
-                visited.add(nxt)
-                current = nxt
+            # Order stops within cluster via greedy nearest-neighbour
+            ordered = self._greedy_order(cluster_idx, adj_matrix)
 
-            if end not in route_stops:
-                route_stops.append(end)
+            # Append nearest CBD stop as terminal (if not already in route)
+            cbd_terminal = self._nearest_cbd(ordered[-1], cbd_ids, adj_matrix)
+            if cbd_terminal not in ordered:
+                ordered.append(cbd_terminal)
 
             routes.append({
                 "route_id"      : f"R{r:03d}",
-                "stop_sequence" : route_stops,
+                "stop_sequence" : ordered,
                 "headway_min"   : random.randint(10, 30),
                 "num_vehicles"  : random.randint(3, 10),
             })
 
         return routes
+
+    # ── K-means helpers ───────────────────────────────────────────────────────
+
+    def _kmeans_labels(self, coords: np.ndarray, k: int) -> np.ndarray:
+        """Return cluster label (0..k-1) for each stop."""
+        if _SKLEARN_AVAILABLE:
+            km = KMeans(n_clusters=k, random_state=self.seed, n_init=10)
+            return km.fit_predict(coords)
+        else:
+            return self._numpy_kmeans(coords, k)
+
+    def _numpy_kmeans(self, coords: np.ndarray, k: int, max_iter: int = 100) -> np.ndarray:
+        """Lightweight K-means using NumPy only (fallback)."""
+        rng = np.random.default_rng(self.seed)
+        # Random initialisation from data points
+        center_idx = rng.choice(len(coords), size=k, replace=False)
+        centers    = coords[center_idx].copy()
+
+        labels = np.zeros(len(coords), dtype=int)
+        for _ in range(max_iter):
+            # Assignment step
+            dists  = np.linalg.norm(coords[:, None, :] - centers[None, :, :], axis=2)
+            new_labels = dists.argmin(axis=1)
+            if np.array_equal(new_labels, labels):
+                break
+            labels = new_labels
+            # Update step
+            for c in range(k):
+                mask = labels == c
+                if mask.any():
+                    centers[c] = coords[mask].mean(axis=0)
+
+        return labels
+
+    def _expand_cluster(
+        self,
+        cluster_idx: List[int],
+        labels: np.ndarray,
+        target_label: int,
+        n: int,
+        min_size: int = 3,
+    ) -> List[int]:
+        """Borrow stops from the most populated other cluster to reach min_size."""
+        pool = [i for i in range(n) if labels[i] != target_label]
+        extra = random.sample(pool, min(min_size - len(cluster_idx), len(pool)))
+        return cluster_idx + extra
+
+    def _greedy_order(self, idx: List[int], adj_matrix: np.ndarray) -> List[int]:
+        """Order stops in idx by greedy nearest-neighbour starting from a random stop."""
+        if len(idx) <= 1:
+            return list(idx)
+
+        ordered  = [random.choice(idx)]
+        remaining = set(idx) - {ordered[0]}
+
+        while remaining:
+            current = ordered[-1]
+            dists   = [(adj_matrix[current][j], j) for j in remaining]
+            dists.sort()
+            ordered.append(dists[0][1])
+            remaining.remove(dists[0][1])
+
+        return ordered
+
+    def _nearest_cbd(self, stop: int, cbd_ids: List[int], adj_matrix: np.ndarray) -> int:
+        """Return the CBD stop closest (by travel time) to `stop`."""
+        best_t, best_s = np.inf, cbd_ids[0]
+        for s in cbd_ids:
+            t = adj_matrix[stop][s]
+            if t < best_t:
+                best_t, best_s = t, s
+        return best_s
 
 
 # ─── Utility ──────────────────────────────────────────────────────────────────

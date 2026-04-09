@@ -9,7 +9,7 @@ Usage:
     python main.py --algo cpu_gwo --quick   # quick test (100 iterations)
     python main.py --benchmark              # speedup benchmark only
     python main.py --gtfs path/to/gtfs      # use real GTFS feed
-    python main.py --stops 500              # synthetic city with 500 stops
+    python main.py --stops 500              # synthetic city with 500 stops (default: 50)
 
 Workflow:
   1. Load / generate city network
@@ -66,8 +66,8 @@ def parse_args():
     p.add_argument("--algo",       default="all",
                    choices=["all", "cuda_gwo", "cpu_gwo", "pso", "ga", "aco"],
                    help="Algorithm to run (default: all)")
-    p.add_argument("--stops",      type=int, default=200,
-                   help="Number of stops in synthetic city (default: 200)")
+    p.add_argument("--stops",      type=int, default=50,
+                   help="Number of stops in synthetic city (default: 50)")
     p.add_argument("--routes",     type=int, default=10,
                    help="Number of routes to optimize (default: 10)")
     p.add_argument("--wolves",     type=int, default=GWO_CONFIG["num_wolves"],
@@ -290,22 +290,62 @@ def generate_outputs(run_results: list, city_data, graph, args):
             (r for r in run_results if r["algo"] == "cuda_gwo"),
             run_results[0]
         )
-        vis.save_interactive_map(map_res["best_routes"], filename="route_map.html")
-        vis.save_static_map(map_res["best_routes"], filename="route_map_static.png")
 
+        # ── Maps (HTML — open in browser) ─────────────────────────────────
+        vis.save_zone_partition_map(
+            filename="MAP_01_city_zones_NSEW.html",
+            title="City Zone Partition — North / South / East / West",
+        )
+        vis.save_zone_optimized_map(
+            map_res["best_routes"],
+            algo_name=map_res["algo"].upper().replace("_", "-"),
+            filename="MAP_02_gwo_routes_on_zones.html",
+        )
+        vis.save_interactive_map(
+            map_res["best_routes"],
+            filename="MAP_03_interactive_route_map.html",
+            cluster_labels=city_data.get("cluster_labels"),
+        )
+
+        # ── Static maps (PNG) ─────────────────────────────────────────────
+        vis.save_static_map(
+            map_res["best_routes"],
+            filename="MAP_04_optimized_routes_static.png",
+        )
         if len(run_results) > 1:
             vis.save_comparison_map(
-                run_results[-1]["best_routes"],  # last baseline
-                map_res["best_routes"],           # CUDA-GWO
+                run_results[-1]["best_routes"],
+                map_res["best_routes"],
+                filename="MAP_05_route_comparison_before_after.png",
             )
 
-        # ── Convergence Plots ─────────────────────────────────────────────
+        # ── Convergence & Benchmark Plots (PNG) ───────────────────────────
         if len(histories) > 0:
-            plotter.plot_hypervolume(histories)
-            plotter.plot_objective_convergence(histories)
-            plotter.plot_speedup(timings)
-            plotter.plot_pareto_front(pareto_objectives)
-            plotter.plot_dashboard(histories, timings, pareto_objectives)
+            if len(run_results) > 1:
+                plotter.plot_benchmark_comparison(
+                    run_results,
+                    filename="PLOT_01_benchmark_all_algorithms.png",
+                )
+            plotter.plot_dashboard(
+                histories, timings, pareto_objectives,
+                filename="PLOT_02_results_dashboard.png",
+            )
+            plotter.plot_hypervolume(
+                histories,
+                filename="PLOT_03_hypervolume_convergence.png",
+            )
+            plotter.plot_objective_convergence(
+                histories,
+                filename="PLOT_04_objective_convergence.png",
+            )
+            plotter.plot_pareto_front(
+                pareto_objectives,
+                filename="PLOT_05_pareto_front.png",
+            )
+            plotter.plot_speedup(
+                timings,
+                filename="PLOT_06_runtime_speedup.png",
+            )
 
     # ── Quality Report ────────────────────────────────────────────────────
     report = quality.evaluate()

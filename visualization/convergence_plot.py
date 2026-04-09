@@ -306,7 +306,144 @@ class ConvergencePlotter:
         logger.info("Dashboard saved: %s", path)
         return path
 
-    # ── 6. Scalability Plot ───────────────────────────────────────────────────
+    # ── 6. Benchmark Comparison (all algos vs CUDA-GWO) ─────────────────────
+
+    def plot_benchmark_comparison(
+        self,
+        run_results : list,          # list of result dicts from main.py
+        filename    : str = "benchmark_comparison.png",
+    ) -> str:
+        """
+        Comprehensive benchmark comparison image:
+          - Convergence curves (f1 over iterations)
+          - Hypervolume convergence
+          - Final objective values grouped bar chart (f1..f4 normalised)
+          - Runtime bar chart
+          - Solution quality table (text)
+        """
+        if not _MPL:
+            return ""
+
+        fig = plt.figure(figsize=(20, 14))
+        gs  = GridSpec(3, 3, figure=fig, hspace=0.48, wspace=0.35)
+
+        algo_names  = [r["algo"]        for r in run_results]
+        runtimes    = [r["runtime_s"]   for r in run_results]
+        objectives  = [r["best_obj"]    for r in run_results]   # each (4,)
+        histories   = {r["algo"]: r["history"] for r in run_results}
+
+        bar_colors  = [COLORS.get(a, "#999999") for a in algo_names]
+        tick_labels = [LABELS.get(a, a)         for a in algo_names]
+        x           = np.arange(len(algo_names))
+
+        # ── Panel 1: f1 convergence ───────────────────────────────────────────
+        ax1 = fig.add_subplot(gs[0, 0])
+        for r in run_results:
+            vals = r["history"].get("best_f1", [])
+            ax1.plot(range(len(vals)), vals,
+                     color=COLORS.get(r["algo"], "#333"),
+                     linewidth=2, label=LABELS.get(r["algo"], r["algo"]))
+        ax1.set_title("f₁  Travel Time Convergence", fontweight="bold", fontsize=11)
+        ax1.set_xlabel("Iteration"); ax1.set_ylabel("Avg Travel Time (min)")
+        ax1.legend(fontsize=7.5); ax1.grid(True, alpha=0.3, linestyle="--")
+
+        # ── Panel 2: Hypervolume convergence ──────────────────────────────────
+        ax2 = fig.add_subplot(gs[0, 1])
+        for r in run_results:
+            hv = r["history"].get("hypervolume", [])
+            ax2.plot(range(len(hv)), hv,
+                     color=COLORS.get(r["algo"], "#333"),
+                     linewidth=2, label=LABELS.get(r["algo"], r["algo"]))
+        ax2.set_title("Hypervolume Convergence", fontweight="bold", fontsize=11)
+        ax2.set_xlabel("Iteration"); ax2.set_ylabel("HV Indicator")
+        ax2.legend(fontsize=7.5); ax2.grid(True, alpha=0.3, linestyle="--")
+
+        # ── Panel 3: Runtime bar ──────────────────────────────────────────────
+        ax3 = fig.add_subplot(gs[0, 2])
+        bars = ax3.bar(x, runtimes, color=bar_colors, edgecolor="black",
+                       linewidth=0.8, zorder=3)
+        for bar, t in zip(bars, runtimes):
+            ax3.text(bar.get_x() + bar.get_width() / 2,
+                     bar.get_height() + 0.3,
+                     f"{t:.1f}s", ha="center", va="bottom",
+                     fontsize=9, fontweight="bold")
+        ax3.set_xticks(x); ax3.set_xticklabels(tick_labels, rotation=20, ha="right", fontsize=9)
+        ax3.set_title("Runtime Comparison", fontweight="bold", fontsize=11)
+        ax3.set_ylabel("Seconds"); ax3.grid(axis="y", alpha=0.3, linestyle="--", zorder=0)
+
+        # ── Panels 4-7: Final value bars for f1..f4 ───────────────────────────
+        obj_labels_short = [
+            "f₁  Travel Time (min)",
+            "f₂  Avg Transfers",
+            "f₃  Fleet Cost (kRs)",
+            "f₄  1 − Coverage",
+        ]
+        positions = [(1, 0), (1, 1), (2, 0), (2, 1)]
+        for fi, (row_i, col_i) in enumerate(positions):
+            ax = fig.add_subplot(gs[row_i, col_i])
+            vals = [float(obj[fi]) for obj in objectives]
+            bars = ax.bar(x, vals, color=bar_colors, edgecolor="black",
+                          linewidth=0.8, zorder=3)
+            # Highlight the best (lowest) bar
+            best_idx = int(np.argmin(vals))
+            bars[best_idx].set_edgecolor("gold")
+            bars[best_idx].set_linewidth(2.5)
+            for bar, v in zip(bars, vals):
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() * 1.01,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+            ax.set_xticks(x)
+            ax.set_xticklabels(tick_labels, rotation=20, ha="right", fontsize=8)
+            ax.set_title(obj_labels_short[fi], fontweight="bold", fontsize=10)
+            ax.grid(axis="y", alpha=0.3, linestyle="--", zorder=0)
+            ax.set_ylabel("Value")
+
+        # ── Panel: Summary text table (bottom-right) ──────────────────────────
+        ax_t = fig.add_subplot(gs[2, 2])
+        ax_t.axis("off")
+        col_headers = ["Algorithm", "f1", "f2", "f3", "f4", "Time(s)"]
+        table_data  = [
+            [LABELS.get(r["algo"], r["algo"]),
+             f"{r['best_obj'][0]:.2f}",
+             f"{r['best_obj'][1]:.3f}",
+             f"{r['best_obj'][2]:.1f}",
+             f"{r['best_obj'][3]:.3f}",
+             f"{r['runtime_s']:.1f}"]
+            for r in run_results
+        ]
+        tbl = ax_t.table(
+            cellText    = table_data,
+            colLabels   = col_headers,
+            cellLoc     = "center",
+            loc         = "center",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(8.5)
+        tbl.scale(1, 1.6)
+        # Header row styling
+        for j in range(len(col_headers)):
+            tbl[(0, j)].set_facecolor("#222222")
+            tbl[(0, j)].set_text_props(color="white", fontweight="bold")
+        # Highlight CUDA-GWO row
+        for i, r in enumerate(run_results):
+            if r["algo"] == "cuda_gwo":
+                for j in range(len(col_headers)):
+                    tbl[(i + 1, j)].set_facecolor("#D0E8FF")
+        ax_t.set_title("Final Results Summary", fontweight="bold", fontsize=10, pad=10)
+
+        plt.suptitle(
+            "Benchmark Comparison — CUDA-GWO vs Baselines\n"
+            f"(50 stops · 10 routes · 50 wolves · 50 iterations)",
+            fontsize=15, fontweight="bold", y=1.01,
+        )
+
+        path = os.path.join(self.output_dir, filename)
+        plt.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close()
+        logger.info("Benchmark comparison saved: %s", path)
+        return path
+
+    # ── 7. Scalability Plot ───────────────────────────────────────────────────
 
     def plot_scalability(
         self,
