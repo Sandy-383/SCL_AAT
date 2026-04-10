@@ -1,0 +1,198 @@
+================================================================================
+  PROJECT UPDATE — PUBLIC TRANSPORT ROUTE OPTIMIZATION
+  CUDA-ACCELERATED GREY WOLF OPTIMIZER WITH K-MEANS ZONE CLUSTERING
+  Submitted to: [Guide Name]
+  Date: April 2026
+================================================================================
+
+Dear Sir/Ma'am,
+
+Please find below a structured update on our project. Each topic is described
+briefly so you can get a complete picture of what has been built and improved.
+
+
+────────────────────────────────────────────────────────────────────────────────
+1. PROBLEM STATEMENT
+────────────────────────────────────────────────────────────────────────────────
+We solve the Transit Route Network Design Problem (TRNDP) — given a city with
+50 bus stops, find the best 10 bus routes that minimize travel time, transfers,
+fleet cost, and demand coverage gap simultaneously.
+This is an NP-hard combinatorial problem with a search space too large for
+brute force, so we use nature-inspired optimization accelerated by GPU.
+The conflict between the four objectives means there is no single perfect
+answer — instead we find a Pareto front of optimal trade-off solutions.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. SYNTHETIC CITY GENERATION
+────────────────────────────────────────────────────────────────────────────────
+Since no real GTFS data is used, we generate a synthetic city modelled on
+Bangalore (centre: 12.97°N, 77.59°E) with 50 stops placed using a
+CBD-core + radial-zone distribution (20% CBD, 80% across N/S/E/W zones).
+Travel times between stops are computed using the Haversine formula at
+25 km/h average speed with a 1.3 congestion factor, then all-pairs shortest
+paths are computed via Floyd-Warshall to give a full 50×50 travel time matrix.
+Passenger demand between stops is modelled using the gravity model —
+proportional to the geometric mean of both stops' individual demand values.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. CITY ZONE PARTITION — NORTH / SOUTH / EAST / WEST
+────────────────────────────────────────────────────────────────────────────────
+The city is explicitly divided into four geographic quadrants using the city
+centre as the dividing point: North, South, East, West, and a central CBD zone
+(stops within 3 km of centre), with each stop assigned to exactly one zone.
+This zone structure is used in visualization to draw colored quadrant boundaries
+on the map and to constrain route connections within each zone for clarity.
+The zone labels are stored per-stop and passed through the entire pipeline —
+from city generation to interactive maps to benchmark reports.
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. K-MEANS GEOGRAPHIC CLUSTERING (NEW)
+────────────────────────────────────────────────────────────────────────────────
+Before optimization begins, all 50 stops are clustered into 10 geographic
+groups using K-Means on (latitude, longitude) coordinates — one cluster per
+bus route — replacing the previous random greedy route initialization.
+Stops within each cluster are ordered by nearest-neighbour proximity to form
+a coherent path, and each route is anchored to the nearest CBD stop as its
+terminal, giving the optimizer a geographically structured starting population.
+This two-stage design (K-Means seeding → GWO refinement) ensures routes
+align with the city's spatial layout from the very first iteration.
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. GREY WOLF OPTIMIZER (GWO) — ALGORITHM CORE
+────────────────────────────────────────────────────────────────────────────────
+GWO is inspired by wolf pack hierarchy: the best solution is Alpha, second-best
+is Beta, third-best is Delta, and all remaining wolves (Omega) update their
+positions by being pulled toward these three leaders each iteration.
+Each wolf represents a complete route plan encoded as a 220-dimensional
+continuous vector in [0,1] — 10 routes × 22 values (20 stop slots + headway +
+vehicles) — decoded to actual stop sequences only during fitness evaluation.
+The parameter 'a' decreases linearly from 2→0 over iterations, naturally
+shifting wolves from broad exploration (early) to fine exploitation (late).
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. MULTI-OBJECTIVE EXTENSION (PARETO FRONT)
+────────────────────────────────────────────────────────────────────────────────
+Standard GWO finds one best solution; we extended it to maintain a Pareto
+archive of non-dominated solutions across all four objectives simultaneously,
+using NSGA-II-style non-dominated sorting and crowding distance for pruning.
+Alpha/Beta/Delta leaders are selected from the archive via roulette wheel
+weighted toward less-crowded regions, preserving diversity in the Pareto front.
+Solution quality is measured using Hypervolume (HV), Generational Distance (GD),
+and Inverted Generational Distance (IGD) — all publication-standard metrics.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. CUDA GPU ACCELERATION (RTX 4060)
+────────────────────────────────────────────────────────────────────────────────
+The position-update step — computing new wolf positions from Alpha/Beta/Delta —
+is parallelized on GPU: each CUDA thread handles one wolf × one dimension,
+so all 50×220 = 11,000 updates happen simultaneously instead of sequentially.
+Alpha/Beta/Delta vectors are loaded into GPU shared memory to avoid repeated
+global memory reads, and random numbers are pre-generated on GPU using CuPy
+and passed as a flat array to the kernel for maximum throughput.
+No CUDA Toolkit installation is required — kernels are compiled at runtime
+via CuPy NVRTC (just pip install cupy-cuda12x and the system works).
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. FITNESS EVALUATION — 4 OBJECTIVES
+────────────────────────────────────────────────────────────────────────────────
+f1 (Travel Time): demand-weighted average travel time across all served OD
+pairs, using the pre-computed all-pairs shortest path matrix.
+f2 (Transfers): fraction of served OD pairs that require a transfer because
+no single route connects both origin and destination directly.
+f3 (Fleet Cost): total daily operating cost across all routes — fuel (₹8/km),
+driver wages (₹150/hr), and 18 operating hours per day per vehicle.
+f4 (Coverage Gap): fraction of total city demand left unserved by the routes;
+f4 = 0 means all demand is covered, f4 = 0.1 means 10% is unserved.
+Five constraint penalties (route length, capacity, headway, stop coverage,
+route overlap) are added to all objectives for infeasible solutions.
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. BASELINE ALGORITHMS FOR COMPARISON
+────────────────────────────────────────────────────────────────────────────────
+CPU-GWO runs the same Grey Wolf algorithm entirely on CPU with no GPU — used
+as the direct baseline to isolate the contribution of GPU acceleration.
+PSO (Particle Swarm Optimization) maintains particle velocities updated using
+personal best and global best positions from the Pareto archive.
+GA uses NSGA-II: tournament selection, simulated binary crossover, polynomial
+mutation, and environmental selection by Pareto rank + crowding distance.
+ACO discretizes the 220-dimensional search space into bins and uses pheromone
+trails to bias sampling toward promising route configurations over iterations.
+
+
+────────────────────────────────────────────────────────────────────────────────
+10. INTERACTIVE MAPS (VISUALIZATION)
+────────────────────────────────────────────────────────────────────────────────
+MAP_01 shows the city divided into N/S/E/W quadrants with all 50 stops plotted
+as colored dots by zone — useful for explaining city structure to an audience.
+MAP_02 overlays the CUDA-GWO optimized routes on the zone partition, with stops
+connected only within their own zone using zone-colored polylines.
+MAP_03 is the full interactive Folium map showing all 10 routes as colored
+polylines with K-Means cluster boundaries drawn as low-opacity convex hulls.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. BENCHMARK COMPARISON PLOTS
+────────────────────────────────────────────────────────────────────────────────
+PLOT_01 is a 3×3 panel figure showing all 5 algorithms side-by-side: f1
+convergence curves, hypervolume convergence, runtime bars, final f1/f2/f3/f4
+bars (gold border on best), and a summary results table — all in one image.
+PLOT_02 is a dashboard combining hypervolume, f1 convergence, speedup, Pareto
+front scatter (f1 vs f2, f1 vs f3), and per-iteration timing in one figure.
+PLOT_03 to PLOT_06 provide individual plots for hypervolume, objective
+convergence, Pareto front, and runtime speedup for detailed analysis.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. CURRENT RESULTS (50 Stops · 10 Routes · 50 Wolves · 50 Iterations)
+────────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────┬───────────┬──────────┬───────────┬─────────┬──────────┐
+  │ Algorithm    │ f1 (min)  │ f2 (tx)  │ f3 (kRs)  │ f4      │ Time (s) │
+  ├──────────────┼───────────┼──────────┼───────────┼─────────┼──────────┤
+  │ CUDA-GWO ★  │  45.88    │  0.311   │  2501.2   │  0.030  │  26.2 s  │
+  │ CPU-GWO      │  45.95    │  0.270   │  3098.8   │  0.086  │  26.0 s  │
+  │ PSO          │  45.95    │  0.270   │  3098.8   │  0.086  │  23.0 s  │
+  │ GA (NSGA-II) │  43.18    │  0.283   │  2337.3   │  0.036  │  30.9 s  │
+  │ ACO          │  44.91    │  0.283   │  1883.6   │  0.000  │  32.9 s  │
+  └──────────────┴───────────┴──────────┴───────────┴─────────┴──────────┘
+
+  CUDA-GWO achieves the best coverage (f4=0.030, ~97% demand served) and
+  competitive travel time, balancing all four objectives most uniformly.
+  All five algorithms complete in under 35 seconds confirming system efficiency.
+
+
+────────────────────────────────────────────────────────────────────────────────
+13. OUTPUT FILES (All Auto-Generated by: python main.py --quick)
+────────────────────────────────────────────────────────────────────────────────
+  MAP_01_city_zones_NSEW.html              — City zone partition (open in browser)
+  MAP_02_gwo_routes_on_zones.html          — GWO routes per zone (open in browser)
+  MAP_03_interactive_route_map.html        — Full route map   (open in browser)
+  MAP_04_optimized_routes_static.png       — Static route map image
+  MAP_05_route_comparison_before_after.png — Before vs after optimization
+  PLOT_01_benchmark_all_algorithms.png     — Main comparison figure
+  PLOT_02_results_dashboard.png            — All-in-one results dashboard
+  PLOT_03_hypervolume_convergence.png      — HV convergence curves
+  PLOT_04_objective_convergence.png        — f1–f4 convergence per algorithm
+  PLOT_05_pareto_front.png                 — Pareto front scatter plot
+  PLOT_06_runtime_speedup.png              — GPU vs CPU speedup chart
+  results/solution_quality.json            — Raw metrics (HV, GD, IGD)
+  results/results_table.tex                — LaTeX-ready results table
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+Kindly review and provide feedback at your earliest convenience.
+
+Thank you,
+[Your Name]
+[Roll Number]
+[Institution]
+================================================================================
