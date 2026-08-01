@@ -1,0 +1,133 @@
+================================================================================
+  GUIDE PRESENTATION SCRIPT — 10 MINUTES
+  CUDA-Accelerated Grey Wolf Optimizer for Public Transit Route Optimization
+================================================================================
+
+
+INTRO  (1 min)
+--------------------------------------------------------------------------------
+"Good morning Sir/Ma'am. Our project is titled —
+Public Transport Route Optimization using CUDA-Accelerated Grey Wolf Optimizer.
+
+In simple terms — we are teaching a computer to design the best possible
+bus routes for a city, using AI running on a GPU.
+
+Let me walk you through the problem, our approach, and the results."
+
+
+THE PROBLEM  (2 min)
+--------------------------------------------------------------------------------
+"Imagine you are in charge of designing bus routes for Bangalore.
+You have 200 bus stops and you need to create 10 routes.
+
+But you have 4 conflicting goals at the same time:
+  - Make passengers reach fast        → minimize travel time
+  - Avoid too many bus changes        → minimize transfers
+  - Keep cost low                     → minimize fleet cost
+  - Serve as many people as possible  → maximize coverage
+
+The conflict is — if you add more routes to cover everyone, cost goes up.
+If you cut cost, coverage drops. There is no single perfect answer.
+
+This is called a Multi-Objective Optimization Problem.
+It is NP-Hard — meaning brute force is impossible even for a computer.
+That is why we need AI."
+
+
+OUR APPROACH  (3 min)
+--------------------------------------------------------------------------------
+"We use an algorithm called the Grey Wolf Optimizer,
+inspired by how wolf packs hunt.
+
+In a wolf pack there is a hierarchy:
+  Alpha  → best wolf        → pack leader
+  Beta   → second best      → second in command
+  Delta  → third best       → third in command
+  Omega  → all others       → the followers
+
+In our system, each wolf is not a real wolf —
+it is a candidate bus route plan.
+We have 50 wolves, meaning 50 different possible route plans.
+Each plan is encoded as 220 numbers representing which stops each route
+visits, how often buses run, and how many vehicles are assigned.
+
+Every iteration, each wolf looks at the top 3 wolves — Alpha, Beta, Delta —
+and adjusts its plan to be more like them.
+Over 50 iterations, all wolves converge toward better and better solutions.
+
+At the end we get a Pareto Front — a set of optimal solutions where each one
+represents a different trade-off between our 4 goals.
+The city planner then picks based on their priority.
+
+Before running GWO, we also use K-Means Clustering to group bus stops
+geographically. This gives the wolves a smart starting point instead of
+random routes — stops that are physically nearby are grouped together
+from the beginning."
+
+
+THE GPU  (2 min)
+--------------------------------------------------------------------------------
+"Now the key technical contribution — why GPU?
+
+Each iteration updates 50 wolves × 220 dimensions = 11,000 values.
+
+On a CPU, these happen one by one — sequentially.
+
+On our NVIDIA RTX 4060 GPU, all 11,000 happen at the same time — in parallel.
+We wrote CUDA kernels that assign one GPU thread per wolf-dimension combination.
+
+We use a hybrid design:
+  GPU → handles parallel math for position updates
+  CPU → handles fitness evaluation (shortest path calculations on a graph)
+Together they are fast and accurate.
+
+The best part — no CUDA Toolkit installation needed.
+Our kernels compile automatically at runtime using NVRTC."
+
+
+RESULTS  (1 min)
+--------------------------------------------------------------------------------
+"We compared against 4 algorithms:
+  CPU-GWO, PSO, Genetic Algorithm, and ACO.
+
+CUDA-GWO achieved 97% demand coverage with the best balanced result
+across all 4 objectives.
+
+The full pipeline — city generation to optimized routes and benchmark plots —
+runs in under 3 minutes on a standard laptop GPU.
+
+Output includes an interactive map of Bangalore showing the optimized routes,
+convergence plots, and a publication-ready results table."
+
+
+CLOSING  (30 sec)
+--------------------------------------------------------------------------------
+"To summarize — we built a GPU-accelerated multi-objective optimizer for
+public transit route design, combining K-Means initialization with
+CUDA-parallelized Grey Wolf Optimization.
+This is the first work to apply this combination to the transit route problem.
+
+Thank you Sir/Ma'am. I am happy to take any questions."
+
+
+================================================================================
+QUICK ANSWERS FOR COMMON QUESTIONS
+================================================================================
+
+Q: Why GWO over Genetic Algorithm?
+A: GWO has fewer parameters to tune — only one, which adjusts automatically.
+   Simpler to parallelize on GPU. Also gives better demand coverage in results.
+
+Q: What is Pareto Front?
+A: When objectives conflict, no single best solution exists.
+   Pareto Front is the set of solutions where improving one goal worsens another.
+   Decision-maker picks based on priority.
+
+Q: How much faster is GPU?
+A: At 200 stops the advantage is visible. At 500+ stops where dimensions
+   grow to 2200, GPU speedup becomes significant because position update
+   becomes the bottleneck.
+
+================================================================================
+END OF SCRIPT
+================================================================================
